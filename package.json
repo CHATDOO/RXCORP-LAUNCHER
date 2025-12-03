@@ -1,15 +1,15 @@
 {
-    "name": "Selvania-Launcher",
-    "preductname": "Selvania Launcher",
-    "version": "2.1.4",
-    "description": "Launcher Mincraft pour le serveur Selvania",
+    "name": "RXCORP-Launcher",
+    "preductname": "RXCORP Launcher",
+    "version": "3.0.0",
+    "description": "Launcher officiel pour les serveurs RXCORP",
     "main": "src/app.js",
     "author": {
-        "name": "luuxis, Inc.",
-        "email": "contact@luuxis.fr",
-        "url": "https://github.com/luuxis"
+        "name": "RXCORP",
+        "email": "contact@rxcorp.fr",
+        "url": "http://localhost:3000/"
     },
-    "url": "http://launcher.luuxis.fr",
+    "url": "http://localhost:3000/",
     "scripts": {
         "start": "cross-env-shell NODE_ENV=dev electron .",
         "dev": "cross-env-shell DEV_TOOL=open nodemon --exec npm start",
@@ -26,6 +26,7 @@
         "minecraft-java-core": "^4.2.3",
         "node-bdd": "^2.0.4",
         "node-fetch": "^2.7.0",
+        "skinview3d": "^3.4.1",
         "xml-js": "^1.6.11"
     },
     "devDependencies": {

@@ -2,7 +2,8 @@
  * @author Luuxis
  * Luuxis License v1.0 (voir fichier LICENSE pour les détails en FR/EN)
  */
-import { config, database, logger, changePanel, appdata, setStatus, pkg, popup } from '../utils.js'
+import { config, database, logger, changePanel, appdata, setStatus, pkg, popup, setBackground } from '../utils.js'
+const skinview3d = require('skinview3d');
 
 const { Launch } = require('minecraft-java-core')
 const { shell, ipcRenderer } = require('electron')
@@ -12,189 +13,128 @@ class Home {
     async init(config) {
         this.config = config;
         this.db = new database();
-        this.news()
-        this.socialLick()
-        this.instancesSelect()
+        this.currentServerIndex = 0;
+        this.instancesList = [];
+        this.skinViewer = null;
+
+        await this.initSkinViewer();
+        await this.loadServers();
+
         document.querySelector('.settings-btn').addEventListener('click', e => changePanel('settings'))
+        document.querySelector('.play-btn').addEventListener('click', () => this.startGame())
+
+        // Navigation
+        document.querySelector('.nav-left').addEventListener('click', () => this.navigateServer(-1));
+        document.querySelector('.nav-right').addEventListener('click', () => this.navigateServer(1));
     }
 
-    async news() {
-        let newsElement = document.querySelector('.news-list');
-        let news = await config.getNews().then(res => res).catch(err => false);
-        if (news) {
-            if (!news.length) {
-                let blockNews = document.createElement('div');
-                blockNews.classList.add('news-block');
-                blockNews.innerHTML = `
-                    <div class="news-header">
-                        <img class="server-status-icon" src="assets/images/icon.png">
-                        <div class="header-text">
-                            <div class="title">Aucun news n'ai actuellement disponible.</div>
-                        </div>
-                        <div class="date">
-                            <div class="day">1</div>
-                            <div class="month">Janvier</div>
-                        </div>
-                    </div>
-                    <div class="news-content">
-                        <div class="bbWrapper">
-                            <p>Vous pourrez suivre ici toutes les news relative au serveur.</p>
-                        </div>
-                    </div>`
-                newsElement.appendChild(blockNews);
-            } else {
-                for (let News of news) {
-                    let date = this.getdate(News.publish_date)
-                    let blockNews = document.createElement('div');
-                    blockNews.classList.add('news-block');
-                    blockNews.innerHTML = `
-                        <div class="news-header">
-                            <img class="server-status-icon" src="assets/images/icon.png">
-                            <div class="header-text">
-                                <div class="title">${News.title}</div>
-                            </div>
-                            <div class="date">
-                                <div class="day">${date.day}</div>
-                                <div class="month">${date.month}</div>
-                            </div>
-                        </div>
-                        <div class="news-content">
-                            <div class="bbWrapper">
-                                <p>${News.content.replace(/\n/g, '</br>')}</p>
-                                <p class="news-author">Auteur - <span>${News.author}</span></p>
-                            </div>
-                        </div>`
-                    newsElement.appendChild(blockNews);
-                }
-            }
-        } else {
-            let blockNews = document.createElement('div');
-            blockNews.classList.add('news-block');
-            blockNews.innerHTML = `
-                <div class="news-header">
-                        <img class="server-status-icon" src="assets/images/icon.png">
-                        <div class="header-text">
-                            <div class="title">Error.</div>
-                        </div>
-                        <div class="date">
-                            <div class="day">1</div>
-                            <div class="month">Janvier</div>
-                        </div>
-                    </div>
-                    <div class="news-content">
-                        <div class="bbWrapper">
-                            <p>Impossible de contacter le serveur des news.</br>Merci de vérifier votre configuration.</p>
-                        </div>
-                    </div>`
-            newsElement.appendChild(blockNews);
+    async initSkinViewer() {
+        let canvas = document.getElementById("skin-viewer");
+        let configClient = await this.db.readData('configClient');
+        let auth = await this.db.readData('accounts', configClient.account_selected);
+
+        // Determine skin URL
+        let skinUrl = "https://textures.minecraft.net/texture/1a4af718455d4aab528e7a61f86fa25e6a369d1768dcb13f7df319a713eb810b"; // Default Steve
+        if (auth?.profile?.skins && auth.profile.skins.length > 0) {
+            skinUrl = auth.profile.skins[0].url;
         }
-    }
 
-    socialLick() {
-        let socials = document.querySelectorAll('.social-block')
-
-        socials.forEach(social => {
-            social.addEventListener('click', e => {
-                shell.openExternal(e.target.dataset.url)
-            })
+        this.skinViewer = new skinview3d.SkinViewer({
+            canvas: canvas,
+            width: 500,
+            height: 600,
+            skin: skinUrl
         });
+
+        // Set initial animation
+        this.skinViewer.animation = new skinview3d.WalkingAnimation();
+        this.skinViewer.animation.speed = 0.5;
+
+        // Adjust camera
+        this.skinViewer.camera.position.z = 60;
+        this.skinViewer.zoom = 0.8;
+        this.skinViewer.fov = 70;
     }
 
-    async instancesSelect() {
+    async loadServers() {
         let configClient = await this.db.readData('configClient')
         let auth = await this.db.readData('accounts', configClient.account_selected)
-        let instancesList = await config.getInstanceList()
-        let instanceSelect = instancesList.find(i => i.name == configClient?.instance_select) ? configClient?.instance_select : null
+        let allInstances = await config.getInstanceList()
 
-        let instanceBTN = document.querySelector('.play-instance')
-        let instancePopup = document.querySelector('.instance-popup')
-        let instancesListPopup = document.querySelector('.instances-List')
-        let instanceCloseBTN = document.querySelector('.close-popup')
-
-        if (instancesList.length === 1) {
-            document.querySelector('.instance-select').style.display = 'none'
-            instanceBTN.style.paddingRight = '0'
-        }
-
-        if (!instanceSelect) {
-            let newInstanceSelect = instancesList.find(i => i.whitelistActive == false)
-            let configClient = await this.db.readData('configClient')
-            configClient.instance_select = newInstanceSelect.name
-            instanceSelect = newInstanceSelect.name
-            await this.db.updateData('configClient', configClient)
-        }
-
-        for (let instance of instancesList) {
+        // Filter by whitelist
+        this.instancesList = [];
+        for (let instance of allInstances) {
             if (instance.whitelistActive) {
-                let whitelist = instance.whitelist.find(whitelist => whitelist == auth?.name)
-                if (whitelist !== auth?.name) {
-                    if (instance.name == instanceSelect) {
-                        let newInstanceSelect = instancesList.find(i => i.whitelistActive == false)
-                        let configClient = await this.db.readData('configClient')
-                        configClient.instance_select = newInstanceSelect.name
-                        instanceSelect = newInstanceSelect.name
-                        setStatus(newInstanceSelect.status)
-                        await this.db.updateData('configClient', configClient)
-                    }
-                }
-            } else console.log(`Initializing instance ${instance.name}...`)
-            if (instance.name == instanceSelect) setStatus(instance.status)
+                let whitelist = instance.whitelist.find(w => w == auth?.name)
+                if (whitelist !== auth?.name) continue;
+            }
+            this.instancesList.push(instance);
         }
 
-        instancePopup.addEventListener('click', async e => {
-            let configClient = await this.db.readData('configClient')
+        // Find selected instance index
+        let instanceSelect = this.instancesList.find(i => i.name == configClient?.instance_select);
+        if (instanceSelect) {
+            this.currentServerIndex = this.instancesList.indexOf(instanceSelect);
+        } else if (this.instancesList.length > 0) {
+            this.currentServerIndex = 0;
+            // Auto select first
+            configClient.instance_select = this.instancesList[0].name;
+            await this.db.updateData('configClient', configClient);
+        }
 
-            if (e.target.classList.contains('instance-elements')) {
-                let newInstanceSelect = e.target.id
-                let activeInstanceSelect = document.querySelector('.active-instance')
+        this.updateCarouselUI();
+    }
 
-                if (activeInstanceSelect) activeInstanceSelect.classList.toggle('active-instance');
-                e.target.classList.add('active-instance');
+    async navigateServer(direction) {
+        if (this.instancesList.length === 0) return;
 
-                configClient.instance_select = newInstanceSelect
-                await this.db.updateData('configClient', configClient)
-                instanceSelect = instancesList.filter(i => i.name == newInstanceSelect)
-                instancePopup.style.display = 'none'
-                let instance = await config.getInstanceList()
-                let options = instance.find(i => i.name == configClient.instance_select)
-                await setStatus(options.status)
-            }
-        })
+        this.currentServerIndex += direction;
 
-        instanceBTN.addEventListener('click', async e => {
-            let configClient = await this.db.readData('configClient')
-            let instanceSelect = configClient.instance_select
-            let auth = await this.db.readData('accounts', configClient.account_selected)
+        // Loop navigation
+        if (this.currentServerIndex < 0) {
+            this.currentServerIndex = this.instancesList.length - 1;
+        } else if (this.currentServerIndex >= this.instancesList.length) {
+            this.currentServerIndex = 0;
+        }
 
-            if (e.target.classList.contains('instance-select')) {
-                instancesListPopup.innerHTML = ''
-                for (let instance of instancesList) {
-                    if (instance.whitelistActive) {
-                        instance.whitelist.map(whitelist => {
-                            if (whitelist == auth?.name) {
-                                if (instance.name == instanceSelect) {
-                                    instancesListPopup.innerHTML += `<div id="${instance.name}" class="instance-elements active-instance">${instance.name}</div>`
-                                } else {
-                                    instancesListPopup.innerHTML += `<div id="${instance.name}" class="instance-elements">${instance.name}</div>`
-                                }
-                            }
-                        })
-                    } else {
-                        if (instance.name == instanceSelect) {
-                            instancesListPopup.innerHTML += `<div id="${instance.name}" class="instance-elements active-instance">${instance.name}</div>`
-                        } else {
-                            instancesListPopup.innerHTML += `<div id="${instance.name}" class="instance-elements">${instance.name}</div>`
-                        }
-                    }
-                }
+        let selectedInstance = this.instancesList[this.currentServerIndex];
 
-                instancePopup.style.display = 'flex'
-            }
+        // Update Config
+        let configClient = await this.db.readData('configClient');
+        configClient.instance_select = selectedInstance.name;
+        await this.db.updateData('configClient', configClient);
 
-            if (!e.target.classList.contains('instance-select')) this.startGame()
-        })
+        this.updateCarouselUI();
+    }
 
-        instanceCloseBTN.addEventListener('click', () => instancePopup.style.display = 'none')
+    async updateCarouselUI() {
+        if (this.instancesList.length === 0) return;
+
+        let instance = this.instancesList[this.currentServerIndex];
+
+        // Update Text
+        document.querySelector('.server-name-display').innerText = instance.name;
+        document.querySelector('.server-status-display').innerText = "Chargement...";
+
+        // Update Status
+        setStatus(instance.status);
+
+        // Update Background (Dynamic)
+        // Try to load background from assets based on server name
+        let backgroundUrl = `assets/images/backgrounds/${instance.name.toLowerCase().replace(/ /g, '_')}.jpg`;
+
+        let body = document.querySelector('body');
+        body.style.backgroundImage = `url('${backgroundUrl}')`;
+        body.style.backgroundSize = 'cover';
+        body.style.backgroundPosition = 'center';
+        body.style.transition = 'background-image 0.5s ease-in-out';
+
+        // Update 3D Model Animation based on server (Optional fun feature)
+        if (instance.name.toLowerCase().includes('pvp')) {
+            this.skinViewer.animation = new skinview3d.RunningAnimation();
+        } else {
+            this.skinViewer.animation = new skinview3d.WalkingAnimation();
+        }
     }
 
     async startGame() {
@@ -203,6 +143,17 @@ class Home {
         let instance = await config.getInstanceList()
         let authenticator = await this.db.readData('accounts', configClient.account_selected)
         let options = instance.find(i => i.name == configClient.instance_select)
+
+        if (!options) {
+            let popupError = new popup();
+            popupError.openPopup({
+                title: 'Erreur',
+                content: 'Aucun serveur sélectionné.',
+                color: 'red',
+                options: true
+            });
+            return;
+        }
 
         let playInstanceBTN = document.querySelector('.play-instance')
         let infoStartingBOX = document.querySelector('.info-starting-game')
@@ -234,7 +185,7 @@ class Home {
                 path: configClient.java_config.java_path,
             },
 
-            JVM_ARGS:  options.jvm_args ? options.jvm_args : [],
+            JVM_ARGS: options.jvm_args ? options.jvm_args : [],
             GAME_ARGS: options.game_args ? options.game_args : [],
 
             screen: {
